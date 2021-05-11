@@ -80,8 +80,12 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.init_sigma_square = init_sigma_square
         self.warm_start = warm_start
         self.flag = False
-        self.features = None
+        self.__features = None
 
+    @property
+    def features(self):
+        return self.__features
+    
 
     def fit(self, X, y):
         if self.warm_start and self.flag:
@@ -107,18 +111,18 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         return self
 
     def design_matrix(self, X):
-        return np.hstack((X, np.ones((X.shape[0], 1))))
+        N, p = X.shape
+        if hasattr(X, 'columns'):
+            features = tuple(X.columns) + ('常数项',)
+        else:
+            features = np.arange(p+1)
+        return np.hstack((X, np.ones((N, 1)))), features
 
     def init(self, X, y, warm_start=False):
         # get information of normal equation
         self.flag = True
-        design = self.design_matrix(X)
+        design, features = self.design_matrix(X)
         n_observants, n_features = design.shape
-
-        if hasattr(X, 'columns'):
-            self.features = X.columns
-        else:
-            self.features = np.arange(n_features)
 
         if warm_start:
             if n_features != self.n_features:
@@ -133,6 +137,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             # self.design_y = design_y *p + self.design_y * (1-p)
             # self.y_norm_squre = y_norm_squre *p + self.y_norm_squre * (1-p)
         else:
+            self.__features = features
             self.n_observants = n_observants
             self.n_features = n_features
             self.gram = design.T @ design
@@ -146,14 +151,12 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             ind = self.alpha > 0
         if self.features is None:
             return tuple([i for i, k in enumerate(ind) if k])
-        elif isinstance(self.features, (list, tuple)):
-            return tuple([self.features[i] for i, k in enumerate(ind) if k])
         else:
-            return tuple(self.features[ind])
+            return tuple([self.features[i] for i, k in enumerate(ind) if k])
 
     def remove_dispensable(self, threshold=None):
         original_features = self.features
-        self.features = self.important_features(threshold=threshold)
+        self.__features = self.important_features(threshold=threshold)
         ind = [k for k, f in enumerate(original_features) if f in self.features]
         self.gram = self.gram[ind, ind]
         self.alpha = self.alpha[ind]
