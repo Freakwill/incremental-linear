@@ -5,11 +5,19 @@ import pandas as pd
 import numpy as np
 
 # prepare the data
-X_keys = ['大缸光谱', '小缸面料大类', '小缸光谱', '小缸配方组合', '小缸浓度']
+X_keys = ['小缸面料大类', '小缸光谱', '小缸配方组合', '小缸浓度']
 Y_keys = ['大缸物料代码', '大缸浓度']
 keys = X_keys + Y_keys
 
-data = pd.read_csv('data.csv')
+try:
+    data = pd.read_csv('data.csv')
+except:
+    data = pd.read_excel('original-data.xlsx', sheet_name=0, index_col=0)
+    data = data[keys]
+
+    data = split(data, ['大缸光谱'])
+    data = dual(data, ['大缸物料代码', '小缸配方组合'], ['大缸浓度', '小缸浓度'])
+    data.to_csv('data.csv')
 
 X_keys = [c for c in data.columns if any(c.startswith(k) for k in X_keys)]
 Y_keys = [c for c in data.columns if c.startswith(Y_keys[0])]
@@ -25,7 +33,7 @@ import time
 columns = ('旧数据训练分数', '旧数据测试分数', '新数据训练分数', '新数据测试分数', '第一次测试分数', '第二次测试分数', '第一次训练耗时/s', '第二次训练耗时/s')
 model_names =('增量Bayes线性回归', '只学习旧数据', '只学习新数据', '一次性学习', '普通线性回归', 'Bayes脊回归')
 
-n_trials = 20
+n_trials = 2
 scores = np.empty((6,8, n_trials))
 
 for _ in range(n_trials):
@@ -136,4 +144,4 @@ for _ in range(n_trials):
 
 scores = np.median(scores, axis=2)
 scores = pd.DataFrame(data=scores, columns=columns, index=model_names)
-scores.to_csv('scores.csv')
+scores.to_csv('scores2.csv')
