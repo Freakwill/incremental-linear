@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+
+"""Incremental Bayesian Linear Regression
+
+Incremental Learning based on Bayesian Linear Regression
+
+*Reference* 
+Fletcher T. Relevance Vector Machines Explained 2010. http://home.mit.bme.hu/~horvath/IDA/RVM.pdf
+
+"""
 
 import numpy as np
 import numpy.linalg as LA
@@ -47,6 +57,7 @@ def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, 
 
 def _ieap(gram, design_y, y_norm_squre, r, p, sigma_square=1, mu=0, Sigma=None):
     # Incremental Version of Evidence Approximation Procedure
+    # do not update alpha
     if sigma_square < EPSILON:
         return sigma_square, mu, Sigma
     Sigma_ = LA.inv(sigma_square * np.eye(p) + Sigma @ gram)
@@ -97,7 +108,9 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
                 self.init_alpha, self.init_sigma_square)
             self.coef_ = self.mu[:-1]
             self.intercept_ = self.mu[-1]
+            self.postprocess()
         return self
+
 
     def partial_fit(self, X, y, r=None):
         if not self.flag:
@@ -108,6 +121,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.sigma_square, self.mu, self.Sigma)
         self.coef_ = self.mu[:-1]
         self.intercept_ = self.mu[-1]
+        self.postprocess()
         return self
 
     def design_matrix(self, X):
@@ -126,6 +140,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
         if warm_start:
             if n_features != self.n_features:
+                # X = self.preprocess(X)
                 raise Exception('Number of features should be keep constant.')
             self.gram = design.T @ design
             self.design_y = np.dot(design.T, y)
@@ -164,18 +179,39 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.design_y = self.design_y[ind]
 
 
+    def postprocess(self):
+        pass
+
+
 
 if __name__ == '__main__':
 
+    print('receive data')
     X=np.array([[1,2,1],[3,3,2], [4,5,3],[5,6,4]])
     y=np.array([3, 6,9.5,10.5])
-    a = IncrementalLinearRegression()
+    print('create a model (set warm_start=True)')
+    a = IncrementalLinearRegression(warm_start=True)
     a.fit(X, y)
-    print(a.predict(X), a.score(X, y))
+    print(f'''
+    coef: {a.coef_}
+    training score: {a.score(X, y)}
+    ''')
+
+    print('save the model')
+    import joblib
+    joblib.dump(a, 'a.model')
+    print('load the model')
+    a= joblib.load('a.model')
+    print('receive new data')
+    print(f'''previous coef: {a.coef_}
+        flag: {a.flag} (if False, then partial_fit will raise an error!)''')
     X=np.array([[5,6,10],[4,3,2], [4,7,6],[5,8,10]])
     y=np.array([11, 8,11,13])
     a.fit(X, y)
-    print(a.predict(X), a.score(X, y))
-    print(a.alpha)
-    print(a.important_features(0.001))
+    print(f'''
+    coef: {a.coef_}
+    training score: {a.score(X, y)}
+    important features: {a.important_features(0.001)}
+    ''')
+    
 
