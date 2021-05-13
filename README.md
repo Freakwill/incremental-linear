@@ -36,18 +36,18 @@ important features: {a.important_features(0.001)}
 
 OUTPUT:
 
-  receive data
-  create a model (set warm_start=True)
+      receive data
+      create a model (set warm_start=True)
 
-      coef: [0.78053444 1.17193856 0.        ]
-      training score: 0.9860162630232226
+          coef: [0.78053444 1.17193856 0.        ]
+          training score: 0.9860162630232226
 
-  save the model
-  load the model
-  receive new data
-  previous coef: [0.78053444 1.17193856 0.        ]
-          flag: True (if False, then partial_fit will raise an error!)
+      save the model
+      load the model
+      receive new data
+      previous coef: [0.78053444 1.17193856 0.        ]
+              flag: True (if False, then partial_fit will raise an error!)
 
-      coef: [1.30151375 0.80216628 0.        ]
-      training score: 0.9772172406517436
-      important features: (0, 1)
+          coef: [1.30151375 0.80216628 0.        ]
+          training score: 0.9772172406517436
+          important features: (0, 1)
