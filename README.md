@@ -55,4 +55,4 @@ OUTPUT:
 
 
 ## Numerical Experiment
-see `example` fold. Just run `script.py`, it will produce a file as the result.
+See `examples` folder. Just run `script.py`, it will produce a file as the result.
