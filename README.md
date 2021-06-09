@@ -35,9 +35,6 @@ important features: {a.important_features(0.001)}
 ```
 
 
-## Numerical Experiment
-see `example` fold. Just run `script.py`, it will produce a file as the result.
-
 OUTPUT:
 
       receive data
@@ -55,3 +52,7 @@ OUTPUT:
           coef: [1.30151375 0.80216628 0.        ]
           training score: 0.9772172406517436
           important features: (0, 1)
+
+
+## Numerical Experiment
+see `example` fold. Just run `script.py`, it will produce a file as the result.
