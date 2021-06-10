@@ -80,7 +80,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         RegressorMixin
         LinearModel
     """
-    def __init__(self, init_alpha=1, init_sigma_square=1, warm_start=False):
+    def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=False):
         """
         Keyword Arguments:
             init_alpha {number|array} -- init value for hyper paramter in priori dist. of N (default: {1})
@@ -90,12 +90,17 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.init_alpha = init_alpha
         self.init_sigma_square = init_sigma_square
         self.warm_start = warm_start
+        self.rate = rate
         self.flag = False
         self.__features = None
 
     @property
     def features(self):
         return self.__features
+
+    @features.setter
+    def features(self, v):
+        self.__features = v
     
 
     def fit(self, X, y):
@@ -103,28 +108,40 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.partial_fit(X, y)
         else:
             self.init(X, y)
-            self.alpha, self.sigma_square, self.mu, self.Sigma = _eap(
-                self.gram, self.design_y, self.y_norm_squre, self.n_observants, self.n_features, 
+            self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
+                self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features_, 
                 self.init_alpha, self.init_sigma_square)
-            self.coef_ = self.mu[:-1]
-            self.intercept_ = self.mu[-1]
+            self.coef_ = self.mu_[:-1]
+            self.intercept_ = self.mu_[-1]
             self.postprocess()
         return self
 
 
     def partial_fit(self, X, y, r=None):
+        # for incremental learning
         if not self.flag:
             raise Exception('There is no initial value for alpha or sigma_square!')
         self.init(X, y, warm_start=True)
-        self.sigma_square, self.mu, self.Sigma = _ieap(
-            self.gram, self.design_y, self.y_norm_squre, (r or self.r_observants), self.n_features, 
-            self.sigma_square, self.mu, self.Sigma)
-        self.coef_ = self.mu[:-1]
-        self.intercept_ = self.mu[-1]
+        self.sigma_square_, self.mu_, self.Sigma_ = _ieap(
+            self.design_, self.design_y_, self.y_norm_squre_, (r or self.rate), self.n_features_, 
+            self.sigma_square_, self.mu_, self.Sigma_)
+        self.coef_ = self.mu_[:-1]
+        self.intercept_ = self.mu_[-1]
         self.postprocess()
         return self
 
     def design_matrix(self, X):
+        """Make design matrix
+        
+        For ordinary linear square, it would be X.T@X, ie the Gram matrix
+        Override it, if you need.
+        
+        Arguments:
+            X {2D array} -- input data
+        
+        Returns:
+            design matrix and names/indexes of features
+        """
         N, p = X.shape
         if hasattr(X, 'columns'):
             features = tuple(X.columns) + ('常数项',)
@@ -139,31 +156,28 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         n_observants, n_features = design.shape
 
         if warm_start:
-            if n_features != self.n_features:
+            if n_features != self.n_features_:
                 # X = self.preprocess(X)
                 raise Exception('Number of features should be keep constant.')
-            self.gram = design.T @ design
-            self.design_y = np.dot(design.T, y)
-            self.y_norm_squre = np.dot(y, y)
-            self.n_observants += n_observants
-            self.r_observants = n_observants / self.n_observants
-            # self.n_observants += n_observants
-            # self.gram = gram * p + self.gram * (1-p)
-            # self.design_y = design_y *p + self.design_y * (1-p)
-            # self.y_norm_squre = y_norm_squre *p + self.y_norm_squre * (1-p)
+            self.design_ = design.T @ design
+            self.design_y_ = np.dot(design.T, y)
+            self.y_norm_squre_ = np.dot(y, y)
+            self.n_observants_ += n_observants
+            if self.rate is None:
+                self.rate = n_observants / self.n_observants_
         else:
             self.__features = features
-            self.n_observants = n_observants
-            self.n_features = n_features
-            self.gram = design.T @ design
-            self.design_y = np.dot(design.T, y)
-            self.y_norm_squre = np.dot(y, y)
+            self.n_observants_ = n_observants
+            self.n_features_ = n_features
+            self.design_ = design.T @ design
+            self.design_y_ = np.dot(design.T, y)
+            self.y_norm_squre_ = np.dot(y, y)
 
     def important_features(self, threshold=None):
         if threshold:
-            ind = self.alpha > threshold
+            ind = self.alpha_ > threshold
         else:
-            ind = self.alpha > 0
+            ind = self.alpha_ > 0
         if self.features is None:
             return tuple([i for i, k in enumerate(ind) if k])
         else:
@@ -173,10 +187,10 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         original_features = self.features
         self.__features = self.important_features(threshold=threshold)
         ind = [k for k, f in enumerate(original_features) if f in self.features]
-        self.gram = self.gram[ind, ind]
-        self.alpha = self.alpha[ind]
-        self.Sigma = self.Sigma[ind, ind]
-        self.design_y = self.design_y[ind]
+        self.design_ = self.design_[ind, ind]
+        self.alpha_ = self.alpha_[ind]
+        self.Sigma_ = self.Sigma_[ind, ind]
+        self.design_y_ = self.design_y_[ind]
 
 
     def postprocess(self):
@@ -197,18 +211,20 @@ if __name__ == '__main__':
     training score: {a.score(X, y)}
     ''')
 
-    print('save the model')
+    print('Saving the model')
     import joblib
     joblib.dump(a, 'a.model')
-    print('load the model')
+    print('Saved the model')
+    print('Loading the model')
     a= joblib.load('a.model')
-    print('receive new data')
-    print(f'''previous coef: {a.coef_}
+    print('Receive new data')
+    print(f'''
+        previous coef: {a.coef_}
         flag: {a.flag} (if False, then partial_fit will raise an error!)''')
     X=np.array([[5,6,10],[4,3,2], [4,7,6],[5,8,10]])
     y=np.array([11, 8,11,13])
     a.fit(X, y)
-    print(f'''
+    print(f'''After incremental learning.
     coef: {a.coef_}
     training score: {a.score(X, y)}
     important features: {a.important_features(0.001)}
