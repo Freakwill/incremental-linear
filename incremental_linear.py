@@ -71,14 +71,21 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     """Incremental Bayesian Linear Regression
 
     Y | w, sigma^2 ~ Xw + N(0, sigma^2), w|alpha ~ N(0, alpha)
-
     Note that var of w denoted by alpha^{-1} in formal literatures.
 
-    calculate alpha and sigma^2 with Evidence Approximation Procedure
+    Idea:
+    1. calculate alpha and sigma^2 with Evidence Approximation Procedure
+    2. update mu and Sigma in one step, from that on.
+
+    You May need to store the model with following codes:
+    ```
+    import joblib
+    joblib.dump(il, 'il.model')
+    il= joblib.load('il.model')
+    ```
     
     Extends:
-        RegressorMixin
-        LinearModel
+        RegressorMixin, LinearModel
     """
     def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=False):
         """
@@ -100,14 +107,19 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
     @features.setter
     def features(self, v):
-        self.__features = v
+        if self.__features is None:
+            self.__features = v
+        elif len(self.__features) == len(v):
+            self.__features = v
+        else:
+            raise NotImplementedError('Sorry, renaming features with different length is not implemented currently.')
     
 
     def fit(self, X, y):
         if self.warm_start and self.flag:
             self.partial_fit(X, y)
         else:
-            self.init(X, y)
+            self._init(X, y)
             self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
                 self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features_, 
                 self.init_alpha, self.init_sigma_square)
@@ -121,7 +133,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         # for incremental learning
         if not self.flag:
             raise Exception('There is no initial value for alpha or sigma_square!')
-        self.init(X, y, warm_start=True)
+        self._init(X, y, warm_start=True)
         self.sigma_square_, self.mu_, self.Sigma_ = _ieap(
             self.design_, self.design_y_, self.y_norm_squre_, (r or self.rate), self.n_features_, 
             self.sigma_square_, self.mu_, self.Sigma_)
@@ -149,7 +161,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             features = np.arange(p+1)
         return np.hstack((X, np.ones((N, 1)))), features
 
-    def init(self, X, y, warm_start=False):
+    def _init(self, X, y, warm_start=False):
         # get information of normal equation
         self.flag = True
         design, features = self.design_matrix(X)
@@ -173,7 +185,8 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.design_y_ = np.dot(design.T, y)
             self.y_norm_squre_ = np.dot(y, y)
 
-    def important_features(self, threshold=None):
+    def informative_features(self, threshold=None):
+        # get informative features whose weights are greater then threshold
         if threshold:
             ind = self.alpha_ > threshold
         else:
@@ -184,13 +197,19 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             return tuple([self.features[i] for i, k in enumerate(ind) if k])
 
     def remove_dispensable(self, threshold=None):
-        original_features = self.features
-        self.__features = self.important_features(threshold=threshold)
-        ind = [k for k, f in enumerate(original_features) if f in self.features]
+        self.filter_features(self.informative_features(threshold=threshold))
+        
+
+    def filter_features(self, features):
+        # features should be contained in self.features
+        
+        ind = [k for k, f in enumerate(self.features) if f in features]
         self.design_ = self.design_[ind, ind]
         self.alpha_ = self.alpha_[ind]
         self.Sigma_ = self.Sigma_[ind, ind]
         self.design_y_ = self.design_y_[ind]
+        self.__features = features
+        self.n_features_ = len(features)
 
 
     def postprocess(self):
@@ -227,7 +246,7 @@ if __name__ == '__main__':
     print(f'''After incremental learning.
     coef: {a.coef_}
     training score: {a.score(X, y)}
-    important features: {a.important_features(0.001)}
+    informative features: {a.informative_features(0.001)}
     ''')
     
 
