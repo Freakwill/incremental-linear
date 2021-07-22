@@ -19,17 +19,6 @@ import time
 from sklearn.datasets import make_regression
 n_features = 100
 noise_old, noise_new, noise_test = 100, 75, 50
-X_old, Y_old, c_old = make_regression(n_samples=5000, n_features=n_features, n_informative=20, bias=10, noise=noise_old, coef=True)
-X_new, Y_new, c_new = make_regression(n_samples=1000, n_features=n_features, n_informative=20, bias=10, noise=noise_new, coef=True)
-X_new += np.random.randn(1000, n_features) * 5
-# About 50% coefs are selected to be perturbated
-c_new = c_old + np.random.randn(n_features) * (np.random.random(n_features)<0.5)
-Y_new = np.dot(X_new, c_new) + 10 + np.random.randn(1000) * noise_new
-X_train, Y_train = np.vstack((X_old, X_new)), np.hstack((Y_old, Y_new))
-X_test, Y_test, c_test = make_regression(n_samples=1000, n_features=n_features, n_informative=20, bias=10, noise=noise_test, coef=True)
-c_test = c_new + np.random.randn(n_features) * 0.5 * (np.random.random(n_features)<0.5)
-X_test += np.random.randn(1000, n_features) * 10
-Y_test = np.dot(X_test, c_test) + 10 + np.random.randn(1000) * noise_test
 
 # the names of models
 columns = ('旧数据训练分数', '旧数据测试分数', '新数据训练分数', '新数据测试分数', '第一次测试分数', '第二次测试分数', '第一次训练耗时/s', '第二次训练耗时/s')
@@ -41,6 +30,20 @@ scores = np.empty((7,8, n_trials))
 
 for _ in range(n_trials):
     print(f'Trial {_} starts...')
+
+    print('generating data...')
+    X_old, Y_old, c_old = make_regression(n_samples=5000, n_features=n_features, n_informative=20, bias=10, noise=noise_old, coef=True)
+    X_new, Y_new, c_new = make_regression(n_samples=1000, n_features=n_features, n_informative=20, bias=10, noise=noise_new, coef=True)
+    X_new += np.random.randn(1000, n_features) * 5
+    # About 50% coefs are selected to be perturbated
+    c_new = c_old + np.random.randn(n_features) * (np.random.random(n_features)<0.5)
+    Y_new = np.dot(X_new, c_new) + 10 + np.random.randn(1000) * noise_new
+    X_train, Y_train = np.vstack((X_old, X_new)), np.hstack((Y_old, Y_new))
+    X_test, Y_test, c_test = make_regression(n_samples=1000, n_features=n_features, n_informative=20, bias=10, noise=noise_test, coef=True)
+    c_test = c_new + np.random.randn(n_features) * 0.5 * (np.random.random(n_features)<0.5)
+    X_test += np.random.randn(1000, n_features) * 10
+    Y_test = np.dot(X_test, c_test) + 10 + np.random.randn(1000) * noise_test
+
     # my method
     print('My algorithm of incremental linear')
     model = IncrementalLinearRegression(warm_start=True)
