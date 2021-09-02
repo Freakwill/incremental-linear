@@ -18,6 +18,7 @@ EPSILON = 1e-16
 
 def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, n_iter=100):
     """Evidence Approximation Procedure
+
     initialize alpha beta
     loop:
         E step:
@@ -29,10 +30,10 @@ def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, 
         1. gamma_i=1-alpha_i Sigma_ii
         2. alpha_i= gamma_i/ mu_i^2
         3. beta = (N- sum_i gamma_i) / ||t- Phi  mu ||^2
-    output alpha beta, stor mu, sigma
+    output alpha, beta; store mu, sigma
     """
 
-    if isinstance(init_alpha, (float, int)):
+    if np.isscalar(init_alpha):
         init_alpha *= np.ones(p)
     gram, design_y, y_norm_squre = gram /N, design_y /N, y_norm_squre /N
     alpha = init_alpha
@@ -56,8 +57,13 @@ def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, 
 
 
 def _ieap(gram, design_y, y_norm_squre, r, p, sigma_square=1, mu=0, Sigma=None):
-    # Incremental Version of Evidence Approximation Procedure
-    # do not update alpha
+    """Incremental Version of Evidence Approximation Procedure
+    mainly update mu, Sigma, but do not update alpha
+
+    Sigma_ <- (sigma^2 + Sigma gram)
+    mu <- Sigma_ ((Sigma . design_y) + sigma_square mu)
+    Sigma <- sigma_square  Sigma_  Sigma
+    """
     if sigma_square < EPSILON:
         return sigma_square, mu, Sigma
     Sigma_ = LA.inv(sigma_square * np.eye(p) + Sigma @ gram)
@@ -87,7 +93,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     Extends:
         RegressorMixin, LinearModel
     """
-    def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=False):
+    def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=False, max_iter=100):
         """
         Keyword Arguments:
             init_alpha {number|array} -- init value for hyper paramter in priori dist. of N (default: {1})
@@ -99,6 +105,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.warm_start = warm_start
         self.rate = rate
         self.flag = False
+        self.max_iter = max_iter
         self.__features = None
 
     @property
@@ -122,7 +129,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self._init(X, y)
             self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
                 self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features_, 
-                self.init_alpha, self.init_sigma_square)
+                self.init_alpha, self.init_sigma_square, self.max_iter)
             self.coef_ = self.mu_[:-1]
             self.intercept_ = self.mu_[-1]
             self.postprocess()
@@ -156,7 +163,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         """
         N, p = X.shape
         if hasattr(X, 'columns'):
-            features = tuple(X.columns) + ('常数项',)
+            features = tuple(X.columns) + ('intercept',)
         else:
             features = np.arange(p+1)
         return np.hstack((X, np.ones((N, 1)))), features
@@ -192,9 +199,9 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         else:
             ind = self.alpha_ > 0
         if self.features is None:
-            return tuple([i for i, k in enumerate(ind) if k])
+            return tuple(i for i, k in enumerate(ind) if k)
         else:
-            return tuple([self.features[i] for i, k in enumerate(ind) if k])
+            return tuple(self.features[i] for i, k in enumerate(ind) if k)
 
     def remove_dispensable(self, threshold=None):
         self.filter_features(self.informative_features(threshold=threshold))
