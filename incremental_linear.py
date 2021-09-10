@@ -93,11 +93,13 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     Extends:
         RegressorMixin, LinearModel
     """
+    
     def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=False, max_iter=100):
         """
         Keyword Arguments:
             init_alpha {number|array} -- init value for hyper paramter in priori dist. of N (default: {1})
             init_sigma_square {number} -- i.v. for variance (default: {1})
+            rate {number} -- the weight of new data (default: {None}, proportion of new data in whole train data)
             warm_start {bool} -- flag for incremental learning
         """
         self.init_alpha = init_alpha
@@ -193,7 +195,15 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.y_norm_squre_ = np.dot(y, y)
 
     def informative_features(self, threshold=None):
-        # get informative features whose weights are greater then threshold
+        """get informative features whose weights are greater then threshold
+
+        Arguments:
+            threshold {number} -- the threshold that weights of informative features should be greater than
+
+        Return:
+            tuple of informative features
+        """
+
         if threshold:
             ind = self.alpha_ > threshold
         else:
@@ -204,11 +214,16 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             return tuple(self.features[i] for i, k in enumerate(ind) if k)
 
     def remove_dispensable(self, threshold=None):
+        # remove non-informative features
         self.filter_features(self.informative_features(threshold=threshold))
         
 
     def filter_features(self, features):
-        # features should be contained in self.features
+        """Features should be contained in self.features
+
+        Filter the features from the original features by the feature names or the indexes;
+        The parameters should be updated accordingly.
+        """
         
         ind = [k for k, f in enumerate(self.features) if f in features]
         self.design_ = self.design_[ind, ind]
