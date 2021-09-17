@@ -15,7 +15,7 @@ from sklearn.base import RegressorMixin
 from sklearn.linear_model._base import LinearModel
 from sklearn.utils.validation import check_is_fitted
 
-__version__ = '2.0'
+__version__ = '2.2'
 
 EPSILON = 1e-16
 
@@ -23,6 +23,34 @@ def scalar_matrix(*args, **kwargs):
     # scalar matrix
     return np.diag(np.full(*args, **kwargs))
 
+def _design_matrix(X, intercept=True):
+    """Make design matrix
+    
+    For ordinary linear square, it would be X.T@X, ie the Gram matrix
+    Override it, if you need.
+    
+    Arguments:
+        X {2D array} -- input data
+        intercept {bool} -- whether to add intercept to the design matrix 
+    
+    Returns:
+        design matrix and names/indexes of features
+    """
+    N, p = X.shape
+    if intercept:
+        if hasattr(X, 'columns'):
+            if 'intercept' in self.columns:
+                raise Exception('It seems that the design matrix has contained `intercept`, please check it.')
+            features = tuple(X.columns) + ('intercept',)
+        else:
+            features = np.arange(p+1)
+        return np.hstack((X, np.ones((N, 1)))), features
+    else:
+        if hasattr(X, 'columns'):
+            features = tuple(X.columns)
+        else:
+            features = np.arange(p)
+        return X, features
 
 def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, n_iter=100):
     """Evidence Approximation Procedure
@@ -91,8 +119,7 @@ def _ieap(gram, design_y, y_norm_squre, r, p, sigma_square=1, mu=0, Sigma=None):
     return sigma_square, mu, Sigma
 
 def _teap(gram, design_y, y_norm_squre, p, sigma_square=1, mu=0, Sigma=None):
-    """Transfer learning Version of Evidence Approximation Procedure
-    mainly update mu, Sigma, but do not update alpha
+    """Transfer learning version of _ieap
 
     just let r = 1 in _ieap
     """
@@ -170,22 +197,25 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         if self.warm_start and self.flag:
             self.partial_fit(X, y)
         else:
-            self._init(X, y)
-            self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
-                self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features_, 
-                self.init_alpha, self.init_sigma_square, self.max_iter)
-            self.coef_ = self.mu_[:-1]
-            self.intercept_ = self.mu_[-1]
-            self.postprocess()
+            self._fit(X, y)
         return self
+
+    def _fit(self, X, y):
+        self._init(X, y)
+        self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
+            self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features_, 
+            self.init_alpha, self.init_sigma_square, self.max_iter)
+        self.postprocess()
 
 
     def partial_fit(self, X, y, rate=None):
         # for incremental learning
         if not self.flag:
-            raise Exception('There is no initial value for alpha or sigma_square!')
-        self._init(X, y, warm_start=True)
+            raise Exception('The model is not initalized sufficiantly!')
         check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
+
+        self._init(X, y, warm_start=True)
+
         self.sigma_square_, self.mu_, self.Sigma_ = _ieap(
             self.design_, self.design_y_, self.y_norm_squre_, (rate or self.rate), self.n_features_, 
             self.sigma_square_, self.mu_, self.Sigma_)
@@ -195,60 +225,37 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     def transfer_fit(self, X, y):
         # for transfer learning
         if not self.flag:
-            raise Exception('There is no initial value for alpha or sigma_square!')
-        self._init(X, y, warm_start=True)
-        check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
+            raise Exception('The model is not initalized sufficiantly!')
+        self._init(X, y, warm_start=False)
         self.sigma_square_, self.mu_, self.Sigma_ = _teap(
             self.design_, self.design_y_, self.y_norm_squre_, self.n_features_, 
             self.sigma_square_, self.mu_, self.Sigma_)
         self.postprocess()
         return self
 
-    def design_matrix(self, X):
-        """Make design matrix
-        
-        For ordinary linear square, it would be X.T@X, ie the Gram matrix
-        Override it, if you need.
-        
-        Arguments:
-            X {2D array} -- input data
-        
-        Returns:
-            design matrix and names/indexes of features
-        """
-        N, p = X.shape
-        if self.intercept:
-            if hasattr(X, 'columns'):
-                features = tuple(X.columns) + ('intercept',)
-            else:
-                features = np.arange(p+1)
-            return np.hstack((X, np.ones((N, 1)))), features
-        else:
-            return X, features
-
     def _init(self, X, y, warm_start=False):
         # get information of normal equation
-        self.flag = True
-        design, features = self.design_matrix(X)
+        design, features = _design_matrix(X, intercept=self.intercept)
         n_observants, n_features = design.shape
 
+        if hasattr(self, 'n_features_') and n_features != self.n_features_:
+            raise Exception('Number of features should be keep constant.')
+        if self.features is not None and any(f1!=f2 for f1, f2 in zip(features, self.features)):
+            raise Exception('Features should be keep identical.')
+
+        self.design_ = design.T @ design
+        self.design_y_ = np.dot(design.T, y)
+        self.y_norm_squre_ = np.dot(y, y)
+
         if warm_start:
-            if n_features != self.n_features_:
-                # X = self.preprocess(X)
-                raise Exception('Number of features should be keep constant.')
-            self.design_ = design.T @ design
-            self.design_y_ = np.dot(design.T, y)
-            self.y_norm_squre_ = np.dot(y, y)
             self.n_observants_ += n_observants
             if self.rate is None:
                 self.rate = n_observants / self.n_observants_
         else:
+            self.flag = True
             self.__features = features
-            self.n_observants_ = n_observants
             self.n_features_ = n_features
-            self.design_ = design.T @ design
-            self.design_y_ = np.dot(design.T, y)
-            self.y_norm_squre_ = np.dot(y, y)
+            self.n_observants_ = n_observants
 
     def informative_features(self, threshold=None):
         """get informative features whose weights are greater then threshold
@@ -298,9 +305,45 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.coef_ = self.mu_
             self.intercept_ = 0
 
+
 class TrensferLinearRegression(IncrementalLinearRegression):
-    # currently it is only an alias for IncrementalLinearRegression
-    pass
+
+    @staticmethod
+    def from_model(model):
+        check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
+        model = TrensferLinearRegression(**model.get_params())
+        model.sigma_square_ = sigma_square_
+        model.mu_ = mu_
+        model.Sigma_ = Sigma_
+        model.postprocess()
+        model.flag = True
+        return model
+
+    def _fit(self, X, y):
+        super().transfer_fit(X, y)
+
+    def _init(self, X, y, warm_start=False):
+        # get information of normal equation
+        self.flag = True
+        design, features = self.design_matrix(X)
+        n_observants, n_features = design.shape
+
+        if hasattr(self, 'n_features_'):
+            if n_features != self.n_features_:
+                raise Exception('Number of features should be keep constant.')
+        else:
+            raise Exception('Trensfer model requires `features` and `n_features_` attribute.')
+
+        self.design_ = design.T @ design
+        self.design_y_ = np.dot(design.T, y)
+        self.y_norm_squre_ = np.dot(y, y)
+
+        if warm_start:
+            self.n_observants_ += n_observants
+            if self.rate is None:
+                self.rate = n_observants / self.n_observants_
+        else:
+            self.n_observants_ = n_observants
 
 
 if __name__ == '__main__':
