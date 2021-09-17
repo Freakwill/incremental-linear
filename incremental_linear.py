@@ -23,7 +23,7 @@ def scalar_matrix(*args, **kwargs):
     # scalar matrix
     return np.diag(np.full(*args, **kwargs))
 
-def _design_matrix(X, intercept=True):
+def _design_matrix(X, fit_intercept=True):
     """Make design matrix
     
     For ordinary linear square, it would be X.T@X, ie the Gram matrix
@@ -31,13 +31,13 @@ def _design_matrix(X, intercept=True):
     
     Arguments:
         X {2D array} -- input data
-        intercept {bool} -- whether to add intercept to the design matrix 
+        fit_intercept {bool} -- whether to add intercept to the design matrix 
     
     Returns:
         design matrix and names/indexes of features
     """
     N, p = X.shape
-    if intercept:
+    if fit_intercept:
         if hasattr(X, 'columns'):
             if 'intercept' in self.columns:
                 raise Exception('It seems that the design matrix has contained `intercept`, please check it.')
@@ -161,7 +161,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         RegressorMixin, LinearModel
     """
 
-    def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=True, max_iter=100, intercept=True):
+    def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=True, max_iter=100, fit_intercept=True):
         """
         Keyword Arguments:
             init_alpha {number|array} -- initial value for hyper paramter in priori dist. of N (default: {1})
@@ -176,7 +176,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.rate = rate
         self.flag = False
         self.max_iter = max_iter
-        self.intercept = intercept
+        self.fit_intercept = fit_intercept
         self.__features = None
 
     @property
@@ -235,7 +235,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
     def _init(self, X, y, warm_start=False):
         # get information of normal equation
-        design, features = _design_matrix(X, intercept=self.intercept)
+        design, features = _design_matrix(X, fit_intercept=self.fit_intercept)
         n_observants, n_features = design.shape
 
         if hasattr(self, 'n_features_') and n_features != self.n_features_:
@@ -298,7 +298,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
 
     def postprocess(self):
-        if self.intercept:
+        if self.fit_intercept:
             self.coef_ = self.mu_[:-1]
             self.intercept_ = self.mu_[-1]
         else:
