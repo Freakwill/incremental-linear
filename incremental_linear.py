@@ -15,7 +15,7 @@ from sklearn.base import RegressorMixin
 from sklearn.linear_model._base import LinearModel
 from sklearn.utils.validation import check_is_fitted
 
-__version__ = '2.2'
+__version__ = '2.3'
 
 EPSILON = 1e-16
 
@@ -164,24 +164,26 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=True, max_iter=100, fit_intercept=True):
         """
         Keyword Arguments:
-            init_alpha {number|array} -- initial value for hyper paramter in priori dist. of N (default: {1})
+            init_alpha {number|array} -- initial value for hyper paramter in priori distribution of N (default: {1})
             init_sigma_square {number} -- initial value for variance (default: {1})
             rate {number} -- the weight of new data (default: {None}, proportion of new data in whole train data)
-            warm_start {bool} -- flag for incremental learning (default: {True})
-            max_iter {number} -- maximum of iterations (only used in first step)
+            warm_start {bool} -- flag to execute incremental learning, if False, it would not do incremental learning (default: {True})
+            max_iter {number} -- maximum of iterations (only used in the first fitting step)
         """
         self.init_alpha = init_alpha
         self.init_sigma_square = init_sigma_square
         self.warm_start = warm_start
         self.rate = rate
-        self.flag = False
+        self.__flag = False
         self.max_iter = max_iter
         self.fit_intercept = fit_intercept
         self.__features = None
 
+
     @property
     def features(self):
         return self.__features
+
 
     @features.setter
     def features(self, v):
@@ -189,60 +191,75 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.__features = v
         elif len(self.__features) == len(v):
             self.__features = v
+        elif v is None:
+            self.__features = None
         else:
             raise NotImplementedError('Sorry, renaming features with different length is not implemented currently.')
-    
+
+    @property
+    def n_features(self):
+        if self.features is None:
+            return 0
+        else:
+            return len(self.features)
+
 
     def fit(self, X, y):
-        if self.warm_start and self.flag:
+        if self.warm_start and self.__flag:
             self.partial_fit(X, y)
         else:
             self._fit(X, y)
         return self
 
+
     def _fit(self, X, y):
         self._init(X, y)
         self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
-            self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features_, 
+            self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features, 
             self.init_alpha, self.init_sigma_square, self.max_iter)
         self.postprocess()
 
 
     def partial_fit(self, X, y, rate=None):
         # for incremental learning
-        if not self.flag:
-            raise Exception('The model is not initalized sufficiantly!')
+        if not self.__flag:
+            raise Exception('The model may not be initalized sufficiantly!')
         check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
 
         self._init(X, y, warm_start=True)
 
         self.sigma_square_, self.mu_, self.Sigma_ = _ieap(
-            self.design_, self.design_y_, self.y_norm_squre_, (rate or self.rate), self.n_features_, 
+            self.design_, self.design_y_, self.y_norm_squre_, (rate or self.rate), self.n_features, 
             self.sigma_square_, self.mu_, self.Sigma_)
         self.postprocess()
         return self
 
+
     def transfer_fit(self, X, y):
         # for transfer learning
-        if not self.flag:
-            raise Exception('The model is not initalized sufficiantly!')
+        if not self.__flag:
+            raise Exception('The model may not be initalized sufficiantly!')
+        check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
+
         self._init(X, y, warm_start=False)
+
         self.sigma_square_, self.mu_, self.Sigma_ = _teap(
-            self.design_, self.design_y_, self.y_norm_squre_, self.n_features_, 
+            self.design_, self.design_y_, self.y_norm_squre_, self.n_features, 
             self.sigma_square_, self.mu_, self.Sigma_)
         self.postprocess()
         return self
+
 
     def _init(self, X, y, warm_start=False):
         # get information of normal equation
         design, features = _design_matrix(X, fit_intercept=self.fit_intercept)
-        n_observants, n_features = design.shape
+        n_observants = design.shape[0]
 
-        if hasattr(self, 'n_features_') and n_features != self.n_features_:
-            raise Exception('Number of features should be keep constant.')
         if self.features is not None and any(f1!=f2 for f1, f2 in zip(features, self.features)):
-            raise Exception('Features should be keep identical.')
-
+            raise Exception("""Features of data and the model should be keep identical.
+                It is recommanded to set self.feature = None, or amend data of X
+                """)
+ 
         self.design_ = design.T @ design
         self.design_y_ = np.dot(design.T, y)
         self.y_norm_squre_ = np.dot(y, y)
@@ -252,13 +269,12 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             if self.rate is None:
                 self.rate = n_observants / self.n_observants_
         else:
-            self.flag = True
             self.__features = features
-            self.n_features_ = n_features
             self.n_observants_ = n_observants
+            self.__flag = True
 
-    def informative_features(self, threshold=None):
-        """get informative features whose weights are greater then threshold
+    def informative_features(self, threshold=0):
+        """Get informative features whose weights are greater then threshold
 
         Arguments:
             threshold {number} -- the threshold that weights of informative features should be greater than
@@ -267,14 +283,12 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             tuple of informative features
         """
 
-        if threshold:
-            ind = self.alpha_ > threshold
-        else:
-            ind = self.alpha_ > 0
+        ind = self.alpha_ > threshold
         if self.features is None:
-            return tuple(i for i, k in enumerate(ind) if k)
+            return tuple(np.nonzero(ind)[0])
         else:
             return tuple(self.features[i] for i, k in enumerate(ind) if k)
+
 
     def remove_dispensable(self, threshold=None):
         # remove non-informative features
@@ -294,7 +308,6 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.Sigma_ = self.Sigma_[ind, ind]
         self.design_y_ = self.design_y_[ind]
         self.__features = features
-        self.n_features_ = len(features)
 
 
     def postprocess(self):
@@ -316,34 +329,21 @@ class TrensferLinearRegression(IncrementalLinearRegression):
         model.mu_ = mu_
         model.Sigma_ = Sigma_
         model.postprocess()
-        model.flag = True
+        model.__flag = True
         return model
+
 
     def _fit(self, X, y):
         super().transfer_fit(X, y)
 
+
     def _init(self, X, y, warm_start=False):
         # get information of normal equation
-        self.flag = True
-        design, features = self.design_matrix(X)
-        n_observants, n_features = design.shape
 
-        if hasattr(self, 'n_features_'):
-            if n_features != self.n_features_:
-                raise Exception('Number of features should be keep constant.')
-        else:
-            raise Exception('Trensfer model requires `features` and `n_features_` attribute.')
+        if self.features is None:
+            raise Exception('Trensfer model requires `features` attribute.')
 
-        self.design_ = design.T @ design
-        self.design_y_ = np.dot(design.T, y)
-        self.y_norm_squre_ = np.dot(y, y)
-
-        if warm_start:
-            self.n_observants_ += n_observants
-            if self.rate is None:
-                self.rate = n_observants / self.n_observants_
-        else:
-            self.n_observants_ = n_observants
+        super()._init(X, y, warm_start)
 
 
 if __name__ == '__main__':
@@ -368,7 +368,7 @@ if __name__ == '__main__':
     print('Receive new data')
     print(f'''
         previous coef: {ilr.coef_}
-        flag: {ilr.flag} (if False, then partial_fit will raise an error!)''')
+        ''')
     X = np.array([[5,6,10],[4,3,2], [4,7,6],[5,8,10]])
     y = np.array([11, 8,11,13])
     ilr.fit(X, y)
