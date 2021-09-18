@@ -4,6 +4,44 @@
 
 Incremental Learning based on Bayesian Linear Regression
 
+Toy Example:
+
+    print('receive data')
+    X=np.array([[1,2,1],[3,3,2], [4,5,3],[5,6,4]])
+    y=np.array([3, 6,9.5,10.5])
+    print('create a model (set warm_start=True)')
+    ilr = IncrementalLinearRegression(warm_start=True)
+    ilr.fit(X, y)
+    print(f'''
+    coef: {ilr.coef_}
+    training score: {ilr.score(X, y)}
+    ''')
+
+    print('Saving the model')
+    import joblib
+    joblib.dump(ilr, 'ilr.model')
+    print('Saved the model')
+    print('Loading the model')
+    ilr = joblib.load('ilr.model')
+    print('Receive new data')
+    print(f'''
+        previous coef: {ilr.coef_}
+        ''')
+    X = np.array([[5,6,10],[4,3,2], [4,7,6],[5,8,10]])
+    y = np.array([11, 8,11,13])
+    ilr.fit(X, y)
+    print(f'''After incremental learning.
+    coef: {ilr.coef_}
+    training score: {ilr.score(X, y)}
+    informative features: {ilr.informative_features(0.001)}
+    ''')
+
+
+Numerical Experiment:
+
+    see files in the folder `examples/*`
+
+
 *Reference* 
 Fletcher T. Relevance Vector Machines Explained 2010. http://home.mit.bme.hu/~horvath/IDA/RVM.pdf
 
@@ -15,7 +53,7 @@ from sklearn.base import RegressorMixin
 from sklearn.linear_model._base import LinearModel
 from sklearn.utils.validation import check_is_fitted
 
-__version__ = '2.3'
+__version__ = '2.5'
 
 EPSILON = 1e-16
 
@@ -151,11 +189,11 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     2. update mu and Sigma in one step, from that on.
 
     You May need to store the model with following codes:
-    ```
-    import joblib
-    joblib.dump(il, 'il.model')
-    il= joblib.load('il.model')
-    ```
+        ```
+        import joblib
+        joblib.dump(il, 'il.model')
+        il= joblib.load('il.model')
+        ```
     
     Extends:
         RegressorMixin, LinearModel
@@ -194,7 +232,11 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         elif v is None:
             self.__features = None
         else:
-            raise NotImplementedError('Sorry, renaming features with different length is not implemented currently.')
+            raise NotImplementedError('''
+        Sorry, renaming features with different length is not implemented currently.
+        It is suggested that users filtrate the features of the model by the method `filter_features` before
+        incremental learning.
+        ''')
 
     @property
     def n_features(self):
@@ -213,15 +255,21 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
 
     def _fit(self, X, y):
+        # Call EAP to compute the parameters
         self._init(X, y)
+
+        # Use attribute `alpha_` and `sigma_square_`, if they are available.
+        alpha = getattr(self, 'alpha_', self.init_alpha)
+        sigma_square = getattr(self, 'sigma_square_', self.init_sigma_square)
+
         self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
             self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features, 
-            self.init_alpha, self.init_sigma_square, self.max_iter)
-        self.postprocess()
+            alpha, sigma_square, self.max_iter)
+        self.set_coef()
 
 
     def partial_fit(self, X, y, rate=None):
-        # for incremental learning
+        # Do incremental learning by Bayesian method
         if not self.__flag:
             raise Exception('The model may not be initalized sufficiantly!')
         check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
@@ -231,14 +279,17 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.sigma_square_, self.mu_, self.Sigma_ = _ieap(
             self.design_, self.design_y_, self.y_norm_squre_, (rate or self.rate), self.n_features, 
             self.sigma_square_, self.mu_, self.Sigma_)
-        self.postprocess()
+        self.set_coef()
         return self
 
 
     def transfer_fit(self, X, y):
-        # for transfer learning
-        if not self.__flag:
-            raise Exception('The model may not be initalized sufficiantly!')
+        """For transfer learning
+
+        It is identical with partial_fit(self, X, y, rate=1)
+        setting rate=1 to forget the old observants.
+        """
+
         check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
 
         self._init(X, y, warm_start=False)
@@ -246,12 +297,12 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.sigma_square_, self.mu_, self.Sigma_ = _teap(
             self.design_, self.design_y_, self.y_norm_squre_, self.n_features, 
             self.sigma_square_, self.mu_, self.Sigma_)
-        self.postprocess()
+        self.set_coef()
         return self
 
 
     def _init(self, X, y, warm_start=False):
-        # get information of normal equation
+        # Get information of normal equation
         design, features = _design_matrix(X, fit_intercept=self.fit_intercept)
         n_observants = design.shape[0]
 
@@ -291,15 +342,18 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
 
     def remove_dispensable(self, threshold=None):
-        # remove non-informative features
+        # Remove non-informative features
         self.filter_features(self.informative_features(threshold=threshold))
         
 
     def filter_features(self, features):
         """Features should be contained in self.features
 
-        Filter the features from the original features by the feature names or the indexes;
+        Filter the (informative) features from the original by the feature names or the indexes;
         The parameters should be updated accordingly.
+
+        It is recommanded to use the data type of DataFrame for input variables,
+        if you want to use the function to change features.
         """
         
         ind = [k for k, f in enumerate(self.features) if f in features]
@@ -310,7 +364,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self.__features = features
 
 
-    def postprocess(self):
+    def set_coef(self):
         if self.fit_intercept:
             self.coef_ = self.mu_[:-1]
             self.intercept_ = self.mu_[-1]
@@ -319,19 +373,24 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             self.intercept_ = 0
 
 
-class TrensferLinearRegression(IncrementalLinearRegression):
-
+class TransferLinearRegression(IncrementalLinearRegression):
+    # Please use the static method `from_model`
+    # to create a TransferLinearRegression object
+    
     @staticmethod
-    def from_model(model):
-        check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
-        model = TrensferLinearRegression(**model.get_params())
-        model.sigma_square_ = sigma_square_
-        model.mu_ = mu_
-        model.Sigma_ = Sigma_
-        model.postprocess()
-        model.__flag = True
+    def from_model(transfered_model, warm_start=False):
+        check_is_fitted(transfered_model, ('sigma_square_', 'mu_', 'Sigma_'))
+        model = TransferLinearRegression()
+        model.sigma_square_ = transfered_model.sigma_square_
+        model.mu_ = transfered_model.mu_
+        model.Sigma_ = transfered_model.Sigma_
+        model.alpha_ = transfered_model.alpha_
+        model.set_params(**transfered_model.get_params())
+        model.set_coef()
+        model.features = transfered_model.features
+        model.__flag = False
+        model.warm_start = warm_start
         return model
-
 
     def _fit(self, X, y):
         super().transfer_fit(X, y)
@@ -339,11 +398,13 @@ class TrensferLinearRegression(IncrementalLinearRegression):
 
     def _init(self, X, y, warm_start=False):
         # get information of normal equation
+        # Trensfer model requires `features` attribute!
 
         if self.features is None:
             raise Exception('Trensfer model requires `features` attribute.')
-
+        
         super()._init(X, y, warm_start)
+        self.__flag = True
 
 
 if __name__ == '__main__':
@@ -376,4 +437,15 @@ if __name__ == '__main__':
     coef: {ilr.coef_}
     training score: {ilr.score(X, y)}
     informative features: {ilr.informative_features(0.001)}
+    ''')
+
+    print('Create a transfer learning model from `ilr`')
+    tlr = TransferLinearRegression.from_model(transfered_model=ilr)
+    X = np.array([[5,6,10],[4,3,2], [4,7,6],[5,8,10]])
+    y = np.array([11, 8,11,13])
+    tlr.fit(X, y)
+    print(f'''After Transfer learning.
+    coef: {tlr.coef_}
+    training score: {tlr.score(X, y)}
+    informative features: {tlr.informative_features(0.001)}
     ''')
