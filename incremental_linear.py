@@ -36,6 +36,16 @@ Toy Example:
     informative features: {ilr.informative_features(0.001)}
     ''')
 
+    print('Create a transfer learning model from `ilr`')
+    tlr = TransferLinearRegression.from_model(transfered_model=ilr)
+    X = np.array([[5,6,10],[4,3,2], [4,7,6],[5,8,10]])
+    y = np.array([11, 8,11,13])
+    tlr.fit(X, y)
+    print(f'''After Transfer learning.
+    coef: {tlr.coef_}
+    training score: {tlr.score(X, y)}
+    informative features: {tlr.informative_features(0.001)}
+    ''')
 
 Numerical Experiment:
 
@@ -89,6 +99,25 @@ def _design_matrix(X, fit_intercept=True):
         else:
             features = np.arange(p)
         return X, features
+
+def feature_check(features1, features2):
+    if features1 is not None:
+        if len(features1) != len(features2):
+            raise Exception("""Features of data and the model should be keep identical.
+                but they are not equal to each other on length.
+                """)
+        if any(f1!=f2 for f1, f2 in zip(features1, features2)):
+            raise Exception("""Features of data and the model should be keep identical.
+                It is recommanded to set self.feature = None, or amend data of X.
+                """)
+
+def find(feature, features):
+    # find a `feature` from `features` list
+    for k, f in enumerate(features):
+        if f == feature:
+            return k
+    return -1
+
 
 def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, n_iter=100):
     """Evidence Approximation Procedure
@@ -227,13 +256,13 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
     def features(self, v):
         if self.__features is None:
             self.__features = v
-        elif len(self.__features) == len(v):
-            self.__features = v
+        elif len(self.__features) < len(v):
+            self.filter_features(v)
         elif v is None:
             self.__features = None
         else:
             raise NotImplementedError('''
-        Sorry, renaming features with different length is not implemented currently.
+        Sorry, renaming features with longer length is not implemented currently.
         It is suggested that users filtrate the features of the model by the method `filter_features` before
         incremental learning.
         ''')
@@ -306,10 +335,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         design, features = _design_matrix(X, fit_intercept=self.fit_intercept)
         n_observants = design.shape[0]
 
-        if self.features is not None and any(f1!=f2 for f1, f2 in zip(features, self.features)):
-            raise Exception("""Features of data and the model should be keep identical.
-                It is recommanded to set self.feature = None, or amend data of X
-                """)
+        feature_check(self.features, features)
  
         self.design_ = design.T @ design
         self.design_y_ = np.dot(design.T, y)
@@ -328,7 +354,8 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         """Get informative features whose weights are greater then threshold
 
         Arguments:
-            threshold {number} -- the threshold that weights of informative features should be greater than
+            threshold {number} -- the threshold that weights of
+                                  informative features should be greater than
 
         Return:
             tuple of informative features
@@ -353,10 +380,17 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         The parameters should be updated accordingly.
 
         It is recommanded to use the data type of DataFrame for input variables,
-        if you want to use the function to change features.
+        if you want to use this method to change features.
+
+        Arguments:
+            features --- subset of self.features
         """
         
-        ind = [k for k, f in enumerate(self.features) if f in features]
+        ind = []
+        for feature in features:
+            i = find(feature, self.features)
+            if i != -1:
+                ind.append(i)
         self.design_ = self.design_[ind, ind]
         self.alpha_ = self.alpha_[ind]
         self.Sigma_ = self.Sigma_[ind, ind]
