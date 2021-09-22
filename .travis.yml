@@ -1,0 +1,28 @@
+language: python
+
+python:
+  - "3.6"
+  - "3.7"
+  - "3.8"
+
+install:
+  - pip install -r requirements.txt
+  
+before_script:
+  - pip install pytest joblib
+
+script:
+  - pytest test.py
+
+notifications:
+  email: false
+
+
+deploy:
+  provider: pypi
+  user: Williamzjc
+  password: ********
+  on:
+    python: 3.8
+    tags: true
+    branch: master
