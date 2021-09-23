@@ -19,4 +19,4 @@ class Test_IL:
         assert k == -1
         
 if __name__ == '__main__':
-    pytest.main("-s test.py")
+    pytest.main("-s test_il.py")
