@@ -1,4 +1,5 @@
 # incremental-linear
+
 Incremental Bayesian linear model
 
 ## Principle
@@ -12,6 +13,7 @@ The coefficients computed by EAP first fitting task, then updated by Bayesian wa
 ## New features
 1. Do transfer learning by method `transfer_fit`
 2. Define TransferLinearRegression class for transfer learning
+3. Define BaseIncrementalLinearRegression and IncrementalGramianLinearRegression where IncrementalGramianLinearRegression implements incremental learning by accumulating the Gram matrix
 
 ## Classes
 IncrementalLinearRegression
