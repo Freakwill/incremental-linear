@@ -63,7 +63,7 @@ from sklearn.base import RegressorMixin
 from sklearn.linear_model._base import LinearModel
 from sklearn.utils.validation import check_is_fitted
 
-__version__ = '2.5'
+__version__ = '3.0'
 
 EPSILON = 1e-16
 
@@ -101,6 +101,7 @@ def _design_matrix(X, fit_intercept=True):
         return X, features
 
 def feature_check(features1, features2):
+    # check the equality of two tuples of features
     if features1 is not None:
         if len(features1) != len(features2):
             raise Exception("""Features of data and the model should be keep identical.
@@ -111,12 +112,19 @@ def feature_check(features1, features2):
                 It is recommanded to set self.feature = None, or amend data of X.
                 """)
 
-def find(feature, features):
+def _find(feature, features):
     # find a `feature` from `features` list
     for k, f in enumerate(features):
         if f == feature:
             return k
     return -1
+
+def _bool_index(ind, features=None):
+    # boolean index for `features` by `ind`
+    if features is None:
+        return tuple(np.nonzero(ind)[0])
+    else:
+        return tuple(features[i] for i, k in enumerate(ind) if k)
 
 
 def _eap(gram, design_y, y_norm_squre, N, p, init_alpha=1, init_sigma_square=1, n_iter=100):
@@ -181,7 +189,8 @@ def _ieap(gram, design_y, y_norm_squre, r, p, sigma_square=1, mu=0, Sigma=None):
     # mu = Sigma_ @ (np.dot(Sigma, design_y) + sigma_square * mu)
     # Sigma = sigma_square * Sigma_ @ Sigma
     
-    sigma_square = (1-r) * sigma_square + r * (np.dot(np.dot(gram, mu), mu)-2*np.dot(mu, design_y)+y_norm_squre)
+    sigma_square_ = np.dot(np.dot(gram, mu), mu) + y_norm_squre - 2*np.dot(mu, design_y)
+    sigma_square += r * (sigma_square_ - sigma_square)
 
     return sigma_square, mu, Sigma
 
@@ -204,7 +213,148 @@ def _teap(gram, design_y, y_norm_squre, p, sigma_square=1, mu=0, Sigma=None):
     return sigma_square, mu, Sigma
 
 
-class IncrementalLinearRegression(RegressorMixin, LinearModel):
+def _normal_equation(design, y, N=1):
+    """Make normal equation
+    """
+    gram = design.T @ design
+    design_y = np.dot(design.T, y)
+    y_norm_squre = np.dot(y, y)
+    return gram / N, design_y / N, y_norm_squre / N
+
+
+class BaseIncrementalLinearRegression(RegressorMixin, LinearModel):
+
+    def __init__(self, rate=None, warm_start=True, fit_intercept=True, max_iter=100):
+        """
+        Keyword Arguments:
+            rate {number} -- the weight of new data (default: {None}, proportion of new data in whole train data)
+            warm_start {bool} -- flag to execute incremental learning, if False, it would not do incremental learning (default: {True})
+            max_iter {number} -- maximum of iterations (only used in the first fitting step)
+            fit_intercept {bool} -- fit the intercept of the linear model or not (default: {True})
+        """
+        self.warm_start = warm_start
+        self.rate = rate
+        self.__flag = False
+        self.max_iter = max_iter
+        self.fit_intercept = fit_intercept
+        self._features = None
+
+    @property
+    def features(self):
+        return self._features
+
+    @property
+    def n_features(self):
+        if self.features is None:
+            return 0
+        else:
+            return len(self.features)
+
+    @features.setter
+    def features(self, v):
+        if self._features is None:
+            self._features = v
+        elif len(self._features) < len(v):
+            self.filter_features(v)
+        elif v is None:
+            self._features = None
+        else:
+            raise NotImplementedError('''
+        Sorry, renaming features with longer length is not implemented currently.
+        It is suggested that users filtrate the features of the model by the method `filter_features` before
+        incremental learning.
+        ''')
+
+    def fit(self, X, y):
+        if self.warm_start and self.__flag:
+            self.partial_fit(X, y)
+        else:
+            self._fit(X, y)
+        return self
+
+
+    def _init(self, X, y, warm_start=False):
+        # Get information of normal equation
+        design, features = _design_matrix(X, fit_intercept=self.fit_intercept)
+        n_observants = design.shape[0]
+
+        feature_check(self.features, features)
+
+        if warm_start:
+            self.n_observants_ += n_observants
+            if self.rate is None:
+                self.rate = n_observants / self.n_observants_
+        else:
+            self._features = features
+            self.n_observants_ = n_observants
+            self.__flag = True
+         
+        self.gram_, self.design_y_, self.y_norm_squre_ = _normal_equation(design, y)
+
+
+    def set_coef(self):
+        if self.fit_intercept:
+            self.coef_ = self.mu_[:-1]
+            self.intercept_ = self.mu_[-1]
+        else:
+            self.coef_ = self.mu_
+            self.intercept_ = 0
+
+
+    def transfer_fit(self, X, y):
+        raise NotImplementedError(f"No transfer learning method for {self.__class__.__name__}")
+
+
+class IncrementalGramianLinearRegression(BaseIncrementalLinearRegression):
+    """Incremental liear regression in a naive way.
+    """
+
+    def _init(self, X, y, warm_start=False):
+        # Get information of normal equation
+        design, features = _design_matrix(X, fit_intercept=self.fit_intercept)
+        n_observants = design.shape[0]
+
+        feature_check(self.features, features)
+
+        if warm_start:
+            self.n_observants_ += n_observants
+            if self.rate is None:
+                r = self.rate = n_observants / self.n_observants_
+            gram, design_y, y_norm_squre = _normal_equation(design, y, N=n_observants)
+            self.gram_ = r * gram + (1 - r) * self.gram_
+            self.design_y_ = r * design_y + (1 - r) * self.design_y_
+            self.y_norm_squre_ = r * y_norm_squre + (1 - r) * self.y_norm_squre_
+        else:
+            self._features = features
+            self.n_observants_ = n_observants
+            self.__flag = True
+            self.gram_, self.design_y_, self.y_norm_squre_ = _normal_equation(design, y, N=n_observants)
+
+
+    def _fit(self, X, y):
+        # Call EAP to compute the parameters
+        self._init(X, y)
+        self.mu_ = LA.solve(self.gram_, self.design_y_)
+        self.sigma_square_ = np.dot(np.dot(self.gram_, self.mu_), self.mu_) + self.y_norm_squre_ - 2*np.dot(self.mu_, self.design_y_)
+        self.set_coef()
+
+
+    def partial_fit(self, X, y, rate=None):
+        # Do incremental learning by Bayesian method
+        if not self.__flag:
+            raise Exception('The model may not be initalized sufficiantly!')
+        check_is_fitted(self, ('sigma_square_', 'mu_', 'Sigma_'))
+
+        gram = self.gram_
+        design_y = self.design_y_
+
+        self._init(X, y, warm_start=True)
+        self.mu_ = LA.solve(self.gram_, self.design_y_)
+
+        self.set_coef()
+        return self
+
+class IncrementalBayesianLinearRegression(BaseIncrementalLinearRegression):
     """Incremental Bayesian Linear Regression
 
     It is based on the following linear model:
@@ -228,7 +378,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         RegressorMixin, LinearModel
     """
 
-    def __init__(self, init_alpha=1, init_sigma_square=1, rate=None, warm_start=True, max_iter=100, fit_intercept=True):
+    def __init__(self, init_alpha=1, init_sigma_square=1, **params):
         """
         Keyword Arguments:
             init_alpha {number|array} -- initial value for hyper paramter in priori distribution of N (default: {1})
@@ -237,50 +387,9 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             warm_start {bool} -- flag to execute incremental learning, if False, it would not do incremental learning (default: {True})
             max_iter {number} -- maximum of iterations (only used in the first fitting step)
         """
+        super().__init__(**params)
         self.init_alpha = init_alpha
         self.init_sigma_square = init_sigma_square
-        self.warm_start = warm_start
-        self.rate = rate
-        self.__flag = False
-        self.max_iter = max_iter
-        self.fit_intercept = fit_intercept
-        self.__features = None
-
-
-    @property
-    def features(self):
-        return self.__features
-
-
-    @features.setter
-    def features(self, v):
-        if self.__features is None:
-            self.__features = v
-        elif len(self.__features) < len(v):
-            self.filter_features(v)
-        elif v is None:
-            self.__features = None
-        else:
-            raise NotImplementedError('''
-        Sorry, renaming features with longer length is not implemented currently.
-        It is suggested that users filtrate the features of the model by the method `filter_features` before
-        incremental learning.
-        ''')
-
-    @property
-    def n_features(self):
-        if self.features is None:
-            return 0
-        else:
-            return len(self.features)
-
-
-    def fit(self, X, y):
-        if self.warm_start and self.__flag:
-            self.partial_fit(X, y)
-        else:
-            self._fit(X, y)
-        return self
 
 
     def _fit(self, X, y):
@@ -292,7 +401,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         sigma_square = getattr(self, 'sigma_square_', self.init_sigma_square)
 
         self.alpha_, self.sigma_square_, self.mu_, self.Sigma_ = _eap(
-            self.design_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features, 
+            self.gram_, self.design_y_, self.y_norm_squre_, self.n_observants_, self.n_features, 
             alpha, sigma_square, self.max_iter)
         self.set_coef()
 
@@ -306,7 +415,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self._init(X, y, warm_start=True)
 
         self.sigma_square_, self.mu_, self.Sigma_ = _ieap(
-            self.design_, self.design_y_, self.y_norm_squre_, (rate or self.rate), self.n_features, 
+            self.gram_, self.design_y_, self.y_norm_squre_, (rate or self.rate), self.n_features, 
             self.sigma_square_, self.mu_, self.Sigma_)
         self.set_coef()
         return self
@@ -324,7 +433,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         self._init(X, y, warm_start=False)
 
         self.sigma_square_, self.mu_, self.Sigma_ = _teap(
-            self.design_, self.design_y_, self.y_norm_squre_, self.n_features, 
+            self.gram_, self.design_y_, self.y_norm_squre_, self.n_features, 
             self.sigma_square_, self.mu_, self.Sigma_)
         self.set_coef()
         return self
@@ -337,7 +446,7 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
 
         feature_check(self.features, features)
  
-        self.design_ = design.T @ design
+        self.gram_ = design.T @ design
         self.design_y_ = np.dot(design.T, y)
         self.y_norm_squre_ = np.dot(y, y)
 
@@ -346,9 +455,10 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             if self.rate is None:
                 self.rate = n_observants / self.n_observants_
         else:
-            self.__features = features
+            self._features = features
             self.n_observants_ = n_observants
             self.__flag = True
+
 
     def informative_features(self, threshold=0):
         """Get informative features whose weights are greater then threshold
@@ -361,11 +471,8 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
             tuple of informative features
         """
 
-        ind = self.alpha_ > threshold
-        if self.features is None:
-            return tuple(np.nonzero(ind)[0])
-        else:
-            return tuple(self.features[i] for i, k in enumerate(ind) if k)
+        ind = self.alpha_ > threshold # or np.isclose(self.mu_, 0)
+        return _bool_index(ind, self.features)
 
 
     def remove_dispensable(self, threshold=None):
@@ -388,33 +495,24 @@ class IncrementalLinearRegression(RegressorMixin, LinearModel):
         
         ind = []
         for feature in features:
-            i = find(feature, self.features)
+            i = _find(feature, self.features)
             if i != -1:
                 ind.append(i)
-        self.design_ = self.design_[ind, ind]
+        self.gram_ = self.design_[ind, ind]
         self.alpha_ = self.alpha_[ind]
         self.Sigma_ = self.Sigma_[ind, ind]
         self.design_y_ = self.design_y_[ind]
-        self.__features = features
+        self._features = features
 
 
-    def set_coef(self):
-        if self.fit_intercept:
-            self.coef_ = self.mu_[:-1]
-            self.intercept_ = self.mu_[-1]
-        else:
-            self.coef_ = self.mu_
-            self.intercept_ = 0
-
-
-class TransferLinearRegression(IncrementalLinearRegression):
+class TransferBayesianLinearRegression(IncrementalBayesianLinearRegression):
     # Please use the static method `from_model`
-    # to create a TransferLinearRegression object
+    # to create a TransferBayesianLinearRegression object
     
-    @staticmethod
-    def from_model(transfered_model, warm_start=False):
+    @classmethod
+    def from_model(cls, transfered_model, warm_start=False):
         check_is_fitted(transfered_model, ('sigma_square_', 'mu_', 'Sigma_'))
-        model = TransferLinearRegression()
+        model = cls()
         model.sigma_square_ = transfered_model.sigma_square_
         model.mu_ = transfered_model.mu_
         model.Sigma_ = transfered_model.Sigma_
@@ -440,6 +538,10 @@ class TransferLinearRegression(IncrementalLinearRegression):
         super()._init(X, y, warm_start)
         self.__flag = True
 
+
+# alias for IncrementalBayesianLinearRegression
+IncrementalLinearRegression = IncrementalBayesianLinearRegression
+TransferLinearRegression = TransferBayesianLinearRegression
 
 if __name__ == '__main__':
 
