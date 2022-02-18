@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+"""
+An example of incremental linear model
+"""
+
 from utils import *
 import pandas as pd
 import numpy as np

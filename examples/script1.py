@@ -25,7 +25,7 @@ columns = ('旧数据训练分数', '旧数据测试分数', '新数据训练分
 model_names =('增量Bayes线性回归', '只学习新数据', '一次性学习', 'SGD回归', 'MLP回归', '普通线性回归', 'Bayes脊回归')
 
 # test
-n_trials = 20
+n_trials = 2
 scores = np.empty((7,8, n_trials))
 
 for _ in range(n_trials):
